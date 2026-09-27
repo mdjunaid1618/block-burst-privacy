@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <script>
+        // 1. Disable standard Web Vibration API
+        if (typeof navigator !== 'undefined') {
+            navigator.vibrate = function() { return false; };
+        }
+
+        // 2. Intercept Capacitor native bridge & plugins to block all Haptics
+        (function() {
+            function disableHaptics() {
+                if (typeof window === 'undefined') return;
+
+                // Intercept AndroidBridge postMessage
+                if (window.androidBridge && !window.androidBridge._hapticsBlocked) {
+                    var origPostMessage = window.androidBridge.postMessage.bind(window.androidBridge);
+                    window.androidBridge.postMessage = function(msg) {
+                        try {
+                            if (typeof msg === 'string' && msg.indexOf('Haptics') !== -1) {
+                                return;
+                            }
+                            var parsed = typeof msg === 'object' ? msg : JSON.parse(msg);
+                            if (parsed && (parsed.pluginId === 'Haptics' || parsed.class === 'Haptics')) {
+                                return;
+                            }
+                        } catch(e) {}
+                        return origPostMessage(msg);
+                    };
+                    window.androidBridge._hapticsBlocked = true;
+                }
+
+                var noOpPlugin = {
+                    vibrate: function() { return Promise.resolve(); },
+                    impact: function() { return Promise.resolve(); },
+                    notification: function() { return Promise.resolve(); },
+                    selectionStart: function() { return Promise.resolve(); },
+                    selectionChanged: function() { return Promise.resolve(); },
+                    selectionEnd: function() { return Promise.resolve(); }
+                };
+
+                window.Capacitor = window.Capacitor || {};
+                window.Capacitor.Plugins = window.Capacitor.Plugins || {};
+                window.Capacitor.Plugins.Haptics = noOpPlugin;
+
+                if (window.Capacitor.toNative) {
+                    var origToNative = window.Capacitor.toNative;
+                    if (!origToNative._patched) {
+                        window.Capacitor.toNative = function(pluginId, methodName, options, callbackId) {
+                            if (pluginId === 'Haptics') {
+                                return;
+                            }
+                            return origToNative.apply(this, arguments);
+                        };
+                        window.Capacitor.toNative._patched = true;
+                    }
+                }
+            }
+
+            disableHaptics();
+            document.addEventListener('DOMContentLoaded', disableHaptics);
+            window.addEventListener('load', disableHaptics);
+            var inv = setInterval(disableHaptics, 20);
+            setTimeout(function() { clearInterval(inv); }, 3000);
+        })();
+
+        // 3. Mute & pause all sound/music when closing/minimizing/leaving the app
+        (function() {
+            window._trackedAudioContexts = [];
+
+            var NativeAudioContext = window.AudioContext || window.webkitAudioContext;
+            if (NativeAudioContext) {
+                var CustomAudioContext = function() {
+                    var ctx = new NativeAudioContext();
+                    window._trackedAudioContexts.push(ctx);
+                    return ctx;
+                };
+                CustomAudioContext.prototype = NativeAudioContext.prototype;
+                window.AudioContext = CustomAudioContext;
+                if (window.webkitAudioContext) {
+                    window.webkitAudioContext = CustomAudioContext;
+                }
+            }
+
+            window.muteAndPauseAllAudio = function() {
+                // Mute Phaser game sound managers
+                if (window.Phaser && window.Phaser.GAMES) {
+                    window.Phaser.GAMES.forEach(function(game) {
+                        if (game && game.sound) {
+                            game.sound.mute = true;
+                            if (game.sound.pauseAll) game.sound.pauseAll();
+                        }
+                    });
+                }
+                // Suspend WebAudio contexts
+                if (window._trackedAudioContexts) {
+                    window._trackedAudioContexts.forEach(function(ctx) {
+                        if (ctx && ctx.state === 'running' && ctx.suspend) {
+                            ctx.suspend().catch(function(){});
+                        }
+                    });
+                }
+                // Pause HTML5 audio elements
+                var audios = document.getElementsByTagName('audio');
+                for (var i = 0; i < audios.length; i++) {
+                    audios[i].pause();
+                    audios[i].muted = true;
+                }
+            };
+
+            window.unmuteAndResumeAllAudio = function() {
+                // Unmute Phaser game sound managers
+                if (window.Phaser && window.Phaser.GAMES) {
+                    window.Phaser.GAMES.forEach(function(game) {
+                        if (game && game.sound) {
+                            game.sound.mute = false;
+                            if (game.sound.resumeAll) game.sound.resumeAll();
+                        }
+                    });
+                }
+                // Resume WebAudio contexts
+                if (window._trackedAudioContexts) {
+                    window._trackedAudioContexts.forEach(function(ctx) {
+                        if (ctx && ctx.state === 'suspended' && ctx.resume) {
+                            ctx.resume().catch(function(){});
+                        }
+                    });
+                }
+                // Unmute HTML5 audio elements
+                var audios = document.getElementsByTagName('audio');
+                for (var i = 0; i < audios.length; i++) {
+                    audios[i].muted = false;
+                    audios[i].play().catch(function(){});
+                }
+            };
+
+            document.addEventListener('visibilitychange', function() {
+                if (document.hidden) {
+                    window.muteAndPauseAllAudio();
+                } else {
+                    window.unmuteAndResumeAllAudio();
+                }
+            });
+            window.addEventListener('blur', window.muteAndPauseAllAudio);
+            window.addEventListener('pagehide', window.muteAndPauseAllAudio);
+            window.addEventListener('focus', window.unmuteAndResumeAllAudio);
+        })();
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, shrink-to-fit=no">
+    <title>Block Burst</title>
+    
+    <!-- PWA & Mobile Fullscreen Capabilities -->
+    <link rel="icon" type="image/png" href="/logo_plaque.png">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-touch-fullscreen" content="yes">
+    <meta name="theme-color" content="#90D5FF" id="theme-color-meta">
+    <meta name="format-detection" content="telephone=no">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@700;800;900&display=swap" rel="stylesheet">
+    <style>
+        @font-face {
+            font-family: 'Nunito';
+            font-style: normal;
+            font-weight: 700;
+            font-display: swap;
+            src: url('/Nunito-Bold.ttf') format('truetype');
+        }
+        @font-face {
+            font-family: 'Nunito';
+            font-style: normal;
+            font-weight: 800;
+            font-display: swap;
+            src: url('/Nunito-ExtraBold.ttf') format('truetype');
+        }
+        @font-face {
+            font-family: 'Nunito';
+            font-style: normal;
+            font-weight: 900;
+            font-display: swap;
+            src: url('/Nunito-Black.ttf') format('truetype');
+        }
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        :root {
+            --sat: env(safe-area-inset-top, 0px);
+            --sar: env(safe-area-inset-right, 0px);
+            --sab: env(safe-area-inset-bottom, 0px);
+            --sal: env(safe-area-inset-left, 0px);
+        }
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            height: 100dvh;
+            min-height: -webkit-fill-available;
+            overflow: hidden;
+            position: fixed;
+            inset: 0;
+            background-color: #90D5FF;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            touch-action: none;
+            font-family: 'Nunito', 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+            transition: background-color 0.3s ease;
+        }
+        #game {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+            outline: none;
+        }
+        /* On larger desktop windows give subtle frame, but keep completely flush on mobile */
+        @media (min-width: 601px) and (min-height: 960px) {
+            canvas {
+                box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+                border-radius: 12px;
+            }
+        }
+        /* Native fullscreen mode styles */
+        :fullscreen, :-webkit-full-screen, :-moz-full-screen, :-ms-fullscreen {
+            width: 100vw !important;
+            height: 100vh !important;
+            background-color: #90D5FF;
+        }
+    </style>
+</head>
+<body>
+    <div id="game"></div>
+
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>
